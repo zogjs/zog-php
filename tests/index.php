@@ -6,7 +6,7 @@ use Zog\Zog;
 // ------------------------------
 //  Configure directories
 // ------------------------------
-Zog::setDir(__DIR__ . '/views');
+Zog::setViewDir(__DIR__ . '/views');
 Zog::setStaticDir(__DIR__ . '/cache/static');
 Zog::setCompiledDir(__DIR__ . '/cache/compiled');
 
@@ -17,7 +17,8 @@ $data = [
     'products' => [
         ['id' => 1, 'name' => 'JavaScript Course', 'model' => 'sx1', 'amount' => 0],
         ['id' => 1, 'name' => 'AI Course', 'model' => 'sx1', 'amount' => 230],
-    ]
+    ],
+    'tags'=>['PHP', 'JavaScript', 'AI']
 ];
 
 
