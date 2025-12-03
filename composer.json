@@ -1,0 +1,34 @@
+{
+    "name": "zogjs/zog-php",
+    "description": "Lightweight PHP template engine with hybrid static caching (no eval).",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "BEN Khalife",
+            "email": "benkhalife@proton.me"
+        }
+    ],
+    "homepage": "https://zogjs.com",
+
+    "support": {
+        "issues": "https://github.com/zogjs/zog-php/issues",
+        "source": "https://github.com/zogjs/zog-php",
+    },
+
+    "require": {
+        "php": "^8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Zog\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ZogPhp\\Tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
