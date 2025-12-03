@@ -13,7 +13,7 @@
 
     "support": {
         "issues": "https://github.com/zogjs/zog-php/issues",
-        "source": "https://github.com/zogjs/zog-php",
+        "source": "https://github.com/zogjs/zog-php"
     },
 
     "require": {
