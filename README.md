@@ -21,7 +21,7 @@ composer require zogjs/zog-php
 In your PHP code:
 
 ```php
-use ZogPhp\Zog; // or the namespace/class you choose for the library
+use Zog\Zog;
 ```
 
 > Adjust the namespace in examples to match how you wire the library into your project.
@@ -35,14 +35,15 @@ use ZogPhp\Zog; // or the namespace/class you choose for the library
 ```php
 use ZogPhp\Zog;
 
-Zog::setDir(__DIR__ . '/views');          // where your view templates live
-Zog::setStaticDir(__DIR__ . '/storage/zog_static'); // where hybrid static files are stored
+Zog::setViewDir(__DIR__ . '/views');
+Zog::setStaticDir(__DIR__ . '/storage/cache/zog_static');
+Zog::setCompiledDir(__DIR__ . '/storage/cache/zog_compiled');
 
 // Optional: default TTL for hybrid cache (in seconds)
 Zog::setDefaultHybridCacheTtl(Zog::CACHE_A_WEEK);
 ```
 
-> `setDir()` and `setStaticDir()` accept either absolute or relative paths.
+> `setViewDir()` and `setStaticDir()` accept either absolute or relative paths.
 > Directories will be created on demand (for static dir).
 
 ### 2. Create a view
@@ -283,7 +284,7 @@ $html = Zog::render('productView.php', [
 echo $html;
 ```
 
-* `$view` is relative to the directory set with `Zog::setDir()`.
+* `$view` is relative to the directory set with `Zog::setViewDir()`.
 * Keys in `$data` are extracted as local variables inside the view (`$title`, `$products`, …).
 * The entire array is also available as `$zogData` inside the template.
 
@@ -545,7 +546,7 @@ Use this for:
 Available configuration methods:
 
 ```php
-Zog::setDir(string $dir);                 // View templates directory
+Zog::setViewDir(string $dir);                 // View templates directory
 Zog::setStaticDir(string $dir);           // Hybrid static cache directory
 Zog::setDefaultHybridCacheTtl(?int $s);   // Default TTL for hybrid() when none is given
 ```
@@ -609,7 +610,5 @@ MIT (or whatever license you choose).
 
 * Open issues and pull requests on GitHub.
 * Ideas, bug reports, and feature suggestions are very welcome.
-
-```
-::contentReference[oaicite:0]{index=0}
-```
+* Logo Design
+* Document Improvement
