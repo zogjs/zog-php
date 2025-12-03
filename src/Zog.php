@@ -69,7 +69,7 @@ class Zog
     /**
      * Configure the base directory for views.
      */
-    public static function setDir(string $dir): void
+    public static function setViewDir(string $dir): void
     {
         $dir = rtrim($dir, "/\\");
         if ($dir === '') {
