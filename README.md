@@ -1,604 +1,559 @@
 # Zog PHP
 
-A tiny, fast, PHP-first view engine with **hybrid static caching**.
+**Zog** is a lightweight PHP view engine with:
 
-- Simple template syntax on top of plain PHP
-- Precompiles templates to PHP (no `eval`)
-- Full-page (or fragment) static cache with automatic expiry
-- Optional **lazy data factory** so your database is only hit when needed
+- **DOM-based template compilation** (no `eval`)
+- **Hybrid static caching** (HTML is pre-rendered to static files with TTL)
+- A small set of **Blade-like directives** (`@section`, `@yield`, `@component`, `@{{ }}`, etc.)
+- A safe way to **disable Zog processing** in parts of the DOM (`zp-nozog`)
 
-Designed to be lightweight enough for small projects and powerful enough for real apps.
+It is designed to be:
 
+- **Tiny & framework-agnostic** – just one class you can drop into any project.
+- **Fast in production** – compiled templates + optional static HTML cache.
+- **Safe by default** – escaped output and no `eval`.
+
+---
+
+## Requirements
+
+- PHP **8.1+**
+- `ext-dom` / `DOMDocument` (standard in most PHP installations)
+- `libxml` (standard in most PHP installations)
+
+---
 
 ## Installation
 
-Via Composer (recommended):
+Copy `Zog.php` (and the accompanying `View.php` file if you use layouts/components) into your project and load it via your autoloader or a simple `require`:
 
-```bash
-composer require zogjs/zog-php
-````
+```php
+require __DIR__ . '/src/Zog.php';
+require __DIR__ . '/src/View.php'; // if you use layouts/components
 
-In your PHP code:
+Configure the directories once at bootstrap time:
 
 ```php
 use Zog\Zog;
+
+Zog::setViewDir(__DIR__ . '/views');
+Zog::setStaticDir(__DIR__ . '/static');       // for hybrid cache files
+Zog::setCompiledDir(__DIR__ . '/storage/zog'); // for compiled templates
 ```
 
-> Adjust the namespace in examples to match how you wire the library into your project.
+> The directories will be created automatically if they do not exist.
 
 ---
 
 ## Quick Start
 
-### 1. Configure directories
+### 1. Simple render
 
-```php
-use ZogPhp\Zog;
-
-Zog::setViewDir(__DIR__ . '/views');
-Zog::setStaticDir(__DIR__ . '/storage/cache/zog_static');
-Zog::setCompiledDir(__DIR__ . '/storage/cache/zog_compiled');
-
-// Optional: default TTL for hybrid cache (in seconds)
-Zog::setDefaultHybridCacheTtl(Zog::CACHE_A_WEEK);
-```
-
-> `setViewDir()` and `setStaticDir()` accept either absolute or relative paths.
-> Directories will be created on demand (for static dir).
-
-### 2. Create a view
-
-`views/productView.php`:
+**views/hello.php**
 
 ```html
-<!DOCTYPE html>
+<h1>Hello @{{ $name }}!</h1>
+<p>Today is @{{ $today }}.</p>
+```
+
+**index.php**
+
+```php
+use Zog\Zog;
+
+echo Zog::render('hello.php', [
+    'name'  => 'Reza',
+    'today' => date('Y-m-d'),
+]);
+```
+
+---
+
+### 2. Layout + section example
+
+**views/layouts/main.php**
+
+```html
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
     <title>@{{ $title }}</title>
 </head>
 <body>
+    <header>
+        <h1>My Site</h1>
+    </header>
 
-<h1>@{{ $heading }}</h1>
-
-<div class="product-list">
-    <div class="product-item" zp-for="$product, $index of $products">
-        <h2>@{{ $product['name'] }}</h2>
-
-        <div zp-if="$product['is_free'] === true">
-            This product is completely free.
-        </div>
-        <div zp-else-if="$product['is_free'] === 'today'">
-            Free just for today.
-        </div>
-        <div zp-else>
-            Price: @{{ $product['price'] }} Toman
-        </div>
-
-        @php( foreach ($product['tags'] as $tag) )
-            <span class="tag">@{{ $tag }}</span>
-        @php( endforeach )
-    </div>
-</div>
-
-<script>
-    // Pass PHP data into JS as JSON
-    const PRODUCTS = @json($products);
-</script>
-
+    <main>
+        @yield('content')
+    </main>
 </body>
 </html>
 ```
 
-### 3. Render it
+**views/pages/home.php**
+
+```html
+@section('content')
+    <h2>Welcome, @{{ $userName }}</h2>
+    <p>This is the home page.</p>
+@endsection
+```
+
+**index.php**
 
 ```php
-$products = [
-    [
-        'name'    => 'VIP Course',
-        'price'   => 750000,
-        'is_free' => false,
-        'tags'    => ['video', 'lifetime'],
-    ],
-    [
-        'name'    => 'Gift E-Book',
-        'price'   => 0,
-        'is_free' => true,
-        'tags'    => ['ebook', 'download'],
-    ],
-];
+use Zog\Zog;
 
-echo Zog::render('productView.php', [
-    'title'    => 'Products',
-    'heading'  => 'Our Products',
-    'products' => $products,
-]);
+echo Zog::renderLayout(
+    'layouts/main.php',
+    'pages/home.php',
+    [
+        'title'    => 'Home',
+        'userName' => 'Reza',
+    ]
+);
 ```
 
 ---
 
-## Template Syntax
+## Template Syntax & Directives
 
-Zog templates are just `.php` files with a small DSL on top.
+Zog parses your HTML with `DOMDocument` and then rewrites special attributes / directives into PHP code.
 
-### Escaped output — `@{{ ... }}`
+### Escaped output – `@{{ ... }}`
 
-Safely print HTML-escaped content:
+Escaped output is the default:
 
 ```html
-<h1>@{{ $title }}</h1>
-<p>@{{ $user['name'] }}</p>
+<p>@{{ $user->name }}</p>
 ```
 
-This compiles to something like:
+Compiles to:
 
 ```php
-<h1><?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?></h1>
+<?php echo htmlspecialchars($user->name, ENT_QUOTES, 'UTF-8'); ?>
 ```
 
-### Raw (unescaped) output — `@raw(...)`
+---
 
-Use when you **know** the content is safe HTML:
+### Raw output – `@raw(...)`
+
+Use raw output only when you are sure the content is safe:
 
 ```html
-<div class="content">
-    @raw($post['html_body'])
-</div>
+<div>@raw($html)</div>
 ```
 
-> Be careful: `@raw()` bypasses HTML escaping. Do **not** feed untrusted user input into it.
+Compiles to:
 
-### JSON for JavaScript — `@json(...)`
+```php
+<?php echo $html; ?>
+```
 
-Conveniently embed PHP structures into JS:
+---
+
+### Raw PHP – `@php(...)`
+
+You can inject raw PHP (enabled by default):
+
+```html
+@php($i = 0)
+
+<ul>
+    @php(for ($i = 0; $i < 3; $i++)):
+        <li>@{{ $i }}</li>
+    @php(endfor;)
+</ul>
+```
+
+If you want to **disable** this directive for security reasons:
+
+```php
+Zog::allowRawPhpDirective(false);
+```
+
+Any use of `@php(...)` after that will throw a `ZogTemplateException`.
+
+---
+
+### JSON / JavaScript – `@json(...)` and `@tojs(...)`
+
+Both directives are equivalent and produce `json_encode`’d output:
 
 ```html
 <script>
-    const PRODUCTS = @json($products);
-    const USER     = @json($user);
+    const items = @json($items);
+    const user  = @tojs($user);
 </script>
 ```
 
-This compiles to:
+Compiles to:
 
 ```php
-<?php echo json_encode($products, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>
+<?php echo json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>
+<?php echo json_encode($user, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>
 ```
-
-### Inline PHP — `@php(...)`
-
-Inject any PHP statement:
-
-```html
-@php( $year = (int) date('Y'); )
-
-<footer>
-    &copy; @{{ $year }} My Company
-</footer>
-```
-
-Or loop constructs:
-
-```html
-@php( foreach ($products as $product) )
-    <div>@{{ $product['name'] }}</div>
-@php( endforeach )
-```
-
-> You can keep `@php` usage minimal and rely mostly on `zp-for`, `zp-if`, etc., for prettier templates.
 
 ---
 
-## Loops — `zp-for`
+### Layouts – `@section`, `@endsection`, `@yield`
 
-Zog adds a `zp-for` attribute on HTML elements to generate `foreach` loops.
-
-Basic form:
+#### In child view
 
 ```html
-<div zp-for="$product of $products">
-    <h2>@{{ $product['name'] }}</h2>
+@section('content')
+    <h2>Dashboard</h2>
+    <p>Hello @{{ $user->name }}!</p>
+@endsection
+```
+
+#### In layout
+
+```html
+<body>
+    @yield('content')
+</body>
+```
+
+At runtime, `Zog\View` handles section buffering and rendering.
+
+---
+
+### Components – `@component(...)`
+
+You can render partials/components from within a template:
+
+```html
+<div class="card">
+    @component('components/user-card.php', ['user' => $user])
 </div>
 ```
 
-With index:
-
-```html
-<div zp-for="$product, $index of $products">
-    <div class="product-index">@{{ $index }}</div>
-    <div class="product-name">@{{ $product['name'] }}</div>
-</div>
-```
-
-Roughly compiles to:
+Or call it directly from PHP:
 
 ```php
-<?php foreach ($products as $index => $product): ?>
-    <div>
-        ...
-    </div>
+$html = Zog::component('components/user-card.php', [
+    'user' => $user,
+]);
+```
+
+---
+
+### Loops – `zp-for`
+
+Use `zp-for` on an element to generate a `foreach`:
+
+```html
+<ul>
+    <li zp-for="item, index of $items">
+        @{{ $index }} – @{{ $item }}
+    </li>
+</ul>
+```
+
+Supports:
+
+* `item of $items`
+* `item, key of $items`
+
+Behind the scenes, this becomes:
+
+```php
+<?php foreach ($items as $index => $item): ?>
+    <li>...</li>
 <?php endforeach; ?>
 ```
 
-* The element that has `zp-for` is the **loop body**.
-* `$product` and `$index` are normal PHP variables inside that element (and its children).
-
 ---
 
-## Conditionals — `zp-if`, `zp-else-if`, `zp-else`
+### Conditionals – `zp-if`, `zp-else-if`, `zp-else`
 
-Use `zp-if`, `zp-else-if`, `zp-else` on sibling elements to build if/else chains.
-
-Example:
+Chain conditional attributes at the **same DOM level**:
 
 ```html
-<div zp-if="$product['is_free'] === true">
-    This product is completely free.
-</div>
-
-<div zp-else-if="$product['is_free'] === 'today'">
-    Free just for today.
-</div>
-
-<div zp-else>
-    Price: @{{ $product['price'] }} Toman
-</div>
+<p zp-if="$user->isAdmin">
+    You are an admin.
+</p>
+<p zp-else-if="$user->isModerator">
+    You are a moderator.
+</p>
+<p zp-else>
+    You are a regular user.
+</p>
 ```
 
-Compiles to something like:
+Compiles roughly to:
 
 ```php
-<?php if ($product['is_free'] === true): ?>
-    <div>...</div>
-<?php elseif ($product['is_free'] === 'today'): ?>
-    <div>...</div>
+<?php if ($user->isAdmin): ?>
+    <p>You are an admin.</p>
+<?php elseif ($user->isModerator): ?>
+    <p>You are a moderator.</p>
 <?php else: ?>
-    <div>...</div>
+    <p>You are a regular user.</p>
 <?php endif; ?>
 ```
 
-Rules:
-
-* `zp-if` must appear first in the chain.
-* Any number of `zp-else-if` can follow.
-* At most one `zp-else` (and it must be the last branch).
-* Only whitespace or comments are allowed between branches.
-
-If a `zp-else-if` or `zp-else` is found without a preceding `zp-if` at the same level, Zog throws a `ZogTemplateException`.
+If a `zp-else-if` or `zp-else` is found without a preceding `zp-if` at the same level, a `ZogTemplateException` is thrown.
 
 ---
 
-## Rendering Views
+### Disabling Zog in a subtree – `zp-nozog`
 
-### `Zog::render(string $view, array $data = []): string`
+Sometimes you want Zog to **leave a part of the DOM untouched**, especially when embedding the markup of another templating system or frontend framework (e.g. Vue, Alpine, etc.).
 
-Render a view with data:
+Add `zp-nozog` to any element to disable **DOM-level** Zog processing for that element and all its descendants:
 
-```php
-$html = Zog::render('productView.php', [
-    'title'    => 'Products',
-    'heading'  => 'Our Products',
-    'products' => $products,
-]);
-
-echo $html;
+```html
+<div zp-nozog>
+    <!-- Zog does NOT compile this zp-if -->
+    <p zp-if="$user->isAdmin">
+        This will be rendered exactly as-is in the final HTML.
+    </p>
+</div>
 ```
 
-* `$view` is relative to the directory set with `Zog::setViewDir()`.
-* Keys in `$data` are extracted as local variables inside the view (`$title`, `$products`, …).
-* The entire array is also available as `$zogData` inside the template.
+Behavior:
 
-Internally, Zog:
+* Zog does **not** convert `zp-if`, `zp-for`, `zp-else-if`, or `zp-else` inside this subtree into PHP.
+* The attribute `zp-nozog` itself is removed from the final HTML.
+* Inline text directives (such as `@{{ $something }}` or `@raw($something)`) still work, because text processing is independent of DOM-level control attributes.
 
-1. Reads the raw template.
-2. Parses HTML + directives to compiled PHP.
-3. Caches the compiled PHP (no `eval`).
-4. `require`s the compiled PHP with your data in scope.
+This is especially useful when you want to keep attributes for a frontend framework:
 
----
-
-## Serving Raw Static Files
-
-Sometimes you just want to output a static snippet stored under the configured static directory.
-
-### `Zog::static(string $relativePath): string`
-
-Alias to `Zog::staticFile()` via `__callStatic`.
-
-```php
-// Reads /path/to/static/dir/terms.html and returns its content as-is.
-echo Zog::static('terms.html');
+```html
+<div zp-nozog>
+    <button v-if="isAdmin">Admin button</button>
+</div>
 ```
 
-If the file doesn’t exist or can’t be read, Zog throws a `ZogException`.
+Zog will not attempt to interpret `v-if="isAdmin"`.
 
 ---
 
 ## Hybrid Static Cache
 
-The **hybrid cache** is designed for pages that:
+Zog’s hybrid cache lets you render a page once, save it as a static file, and serve that file on future requests until a TTL (time to live) expires.
 
-* Are generated from dynamic data (database, APIs…)
-* But do **not** change on every request
+Signature:
 
-Typical use-case: blog posts, landing pages, product pages.
-
-Zog will:
-
-1. Render the view once.
-2. Store the full HTML (plus an expiry comment) as a static file.
-3. On subsequent requests, serve the static file directly, **without hitting the database**, until it expires.
+```php
+Zog::hybrid(
+    string $view,
+    string|array $key,
+    array|callable|null $dataOrFactory = null,
+    ?int $cacheTtl = null
+);
+```
 
 ### Cache TTL constants
 
-Available duration constants (in seconds):
-
 ```php
-Zog::CACHE_NONE       // 0
-Zog::CACHE_A_MINUTE   // 60
-Zog::CACHE_AN_HOUR    // 3600
-Zog::CACHE_A_DAY      // 86400
-Zog::CACHE_A_WEEK     // 604800
+use Zog\Zog;
 
-// Legacy alias kept for backward compatibility:
-Zog::CACH_A_WEEK      // 604800
+Zog::CACHE_NONE    // 0
+Zog::CACHE_A_MINUTE
+Zog::CACHE_AN_HOUR
+Zog::CACHE_A_DAY
+Zog::CACHE_A_WEEK
 ```
 
-You can also pass any custom TTL (integer seconds).
+You can also override the default TTL:
 
-### Cache key — string or array
+```php
+Zog::setDefaultHybridCacheTtl(Zog::CACHE_A_DAY);
+// or disable default TTL (TTL must be explicit in hybrid calls)
+Zog::setDefaultHybridCacheTtl(null);
+```
 
-`hybrid()` understands two forms of cache key:
-
-1. **String key** – nice for simple slugs:
-
-   ```php
-   'my-post-slug'
-   ```
-
-2. **Array key** – for multi-dimensional caching (slug + lang + device…):
-
-   ```php
-   [
-       'slug'   => $slug,
-       'lang'   => $lang,
-       'device' => $isMobile ? 'm' : 'd',
-   ]
-   ```
-
-Array keys are normalized and hashed internally, so order of keys doesn’t matter.
+> Internally, static files start with a comment that holds the expiry date, for example:
+> `<!-- Automatically generated by zog: [ex:2025-12-09] -->`
+> This is just an HTML comment and is ignored by browsers and search engines.
 
 ---
 
-### Usage Modes
-
-#### 1) Read-only mode
-
-Try to use an existing static file; if missing/expired, you get `false`:
-
-```php
-$html = Zog::hybrid('postView.php', $slug);
-
-if ($html !== false) {
-    echo $html;
-    return;
-}
-
-// No valid cache → you decide what to do (e.g. fetch data & re-render)
-```
-
-Signature:
-
-```php
-Zog::hybrid(string $view, string|array $key): string|false;
-```
-
----
-
-#### 2) Force re-render with explicit data
-
-Always render and overwrite the static cache with the given data:
+### Mode 1 – Direct data (always re-render)
 
 ```php
 $html = Zog::hybrid(
-    'postView.php',
-    $slug,
+    'pages/home.php',
+    'home',
     [
-        'title' => $post->title,
-        'post'  => $post,
+        'title' => 'Home',
+        'user'  => $user,
     ],
-    Zog::CACHE_A_DAY
+    Zog::CACHE_A_HOUR
 );
-
-echo $html;
 ```
 
-Signature:
+* Always **re-renders** the view.
+* Writes/overwrites the static file.
+* Returns the rendered HTML (including the header comment).
 
-```php
-Zog::hybrid(
-    string       $view,
-    string|array $key,
-    array        $data,
-    ?int         $cacheTtl = null
-): string;
-```
-
-* If `$cacheTtl` is `null`, Zog uses the default TTL set via `setDefaultHybridCacheTtl()`.
-* If TTL is `0` or `Zog::CACHE_NONE`, the file is treated as “never expires” and gets a far future expiry date.
+This mode behaves like `render()` plus “also save the result to a static file”.
 
 ---
 
-#### 3) Lazy data factory (recommended)
+### Mode 2 – Lazy factory (only run when needed)
 
-This is the nicest way to integrate hybrid caching with database access.
-
-You pass a **callable** instead of a plain array.
-Zog will only call it when needed (cache miss or expired):
+This is the recommended mode when fetching data from a database or an API.
 
 ```php
-echo Zog::hybrid(
-    'postView.php',
-    ['slug' => $slug],
-    function () use ($slug) {
-        $post = Post::where('slug', $slug)->firstOrFail();
-
-        $related = Post::where('category_id', $post->category_id)
-            ->where('id', '!=', $post->id)
-            ->latest()
-            ->limit(5)
-            ->get();
+$html = Zog::hybrid(
+    'pages/home.php',
+    'home',
+    function () use ($db, $userId) {
+        // This closure is called only when:
+        // - there is no static file, or
+        // - it has expired.
+        $user = $db->getUserById($userId);
 
         return [
-            'title'   => $post->title,
-            'post'    => $post,
-            'related' => $related,
+            'title' => 'Home',
+            'user'  => $user,
         ];
     },
-    Zog::CACHE_A_WEEK
+    Zog::CACHE_A_HOUR
 );
 ```
 
-* If a **valid** static file exists → Zog returns it immediately.
-  The factory is **not** called; your DB is not touched.
-* If the cache is **missing or expired** → Zog:
+Workflow:
 
-  1. Calls the factory
-  2. Expects an `array` of view data
-  3. Renders the view
-  4. Stores the static file and returns the resulting HTML
+1. If a valid static file exists and has not expired, Zog:
 
-Signature:
+   * Returns its contents.
+   * **Does not call** the factory.
+2. If the file is missing or expired, Zog:
 
-```php
-Zog::hybrid(
-    string          $view,
-    string|array    $key,
-    callable|array  $dataOrFactory,
-    ?int            $cacheTtl = null
-): string;
-```
+   * Calls the factory.
+   * Expects an `array` of data.
+   * Renders the view.
+   * Writes a new static file with an updated expiry comment.
+   * Returns the fresh HTML.
 
-If the callable does not return an array, a `ZogException` is thrown.
+If the factory does not return an array, Zog throws a `ZogException`.
 
 ---
 
-### Where are static files stored?
+### Mode 3 – Read-only access
 
-All hybrid static files live under the directory configured with:
+You can check or serve an existing static file without rendering or running any data logic:
 
 ```php
-Zog::setStaticDir(__DIR__ . '/storage/zog_static');
+$content = Zog::hybrid(
+    'pages/home.php',
+    'home',
+    null // read-only mode
+);
+
+if ($content === false) {
+    // no valid cache yet
+    // you can decide to build it here or fall back to render()
+    $content = Zog::render('pages/home.php', [
+        'title' => 'Home',
+        'user'  => $user,
+    ]);
+}
+
+echo $content;
 ```
 
-Zog uses the view name and the cache key to build a filename:
+* Returns `false` if:
 
-* String key:
-
-  ```txt
-  postView-my-post-slug.php
-  ```
-
-* Array key:
-
-  ```txt
-  postView-h-e4f1c2a3b7c9d812.php
-  ```
-
-Each static file starts with an HTML comment containing the expiry date:
-
-```html
-<!-- Automatically generated by zog: [ex:2025-12-09] -->
-<!DOCTYPE html>
-<html>...</html>
-```
-
-This comment:
-
-* Is ignored by browsers and search engines
-* Lets Zog quickly decide whether a cached file is still valid
-* Keeps expiry metadata **inside** the static file (no extra meta files needed)
+  * The static file does not exist.
+  * The static file is unreadable.
+  * The static file is expired or has an invalid expiry comment.
 
 ---
 
-## Clearing Static Cache
+### Static file naming
 
-To remove all static files under the configured static directory:
+Static files are stored under the static directory configured with `Zog::setStaticDir()`.
+
+* If `$key` is a **string**, Zog creates a slug-like filename:
+  `viewName-your-key.php`
+* If `$key` is an **array**, Zog:
+
+  * Normalizes the array (sorts associative keys, recursively).
+  * JSON-encodes it.
+  * Hashes the JSON.
+  * Uses a short `sha1` prefix, e.g. `viewName-zog-0123456789abcdef.php`.
+
+This guarantees that the same logical key always maps to the same static file.
+
+---
+
+## Directory Helpers
 
 ```php
+// Change where views are loaded from
+Zog::setViewDir(__DIR__ . '/views');
+
+// Change where static cache files are written
+Zog::setStaticDir(__DIR__ . '/static');
+
+// Change where compiled PHP templates are stored
+Zog::setCompiledDir(__DIR__ . '/storage/zog');
+```
+
+### Clearing caches
+
+```php
+// Remove all static HTML files (does not delete the directory itself)
 Zog::clearStatics();
-```
 
-This:
-
-* Does **not** delete the directory itself
-* Only unlinks files directly inside that directory (no recursive subfolders)
-
-Use this for:
-
-* Deployment / release scripts
-* Admin “clear cache” buttons
-
----
-
-## Configuration Summary
-
-Available configuration methods:
-
-```php
-Zog::setViewDir(string $dir);                 // View templates directory
-Zog::setStaticDir(string $dir);           // Hybrid static cache directory
-Zog::setDefaultHybridCacheTtl(?int $s);   // Default TTL for hybrid() when none is given
+// Remove all compiled template files (does not delete the directory itself)
+Zog::clearCompiled();
 ```
 
 ---
 
-## Exceptions & Error Handling
+## Error Handling
 
-Zog throws custom exceptions:
+Zog uses exceptions for all error conditions:
 
-* `ZogException`
-  Base runtime exception for:
+* `ZogException` – base exception for general runtime issues:
 
-  * Missing view files
-  * IO problems
-  * Invalid arguments
-  * Rendering failures, etc.
+  * bad directories
+  * missing view files
+  * I/O failures
+  * invalid hybrid usage
+* `ZogTemplateException` – template compilation errors:
 
-* `ZogTemplateException`
-  For template compilation errors:
+  * invalid `zp-for` / `zp-if` syntax
+  * unmatched parentheses in directives
+  * `zp-else` without a preceding `zp-if`
+  * misuse of section/component directives
+  * disabled `@php()` still being used
 
-  * Invalid `zp-for` or `zp-if` expressions
-  * Orphan `zp-else` / `zp-else-if`
-  * Bad `@json()` usage, etc.
-
-Typical handling:
+Example:
 
 ```php
 try {
-    echo Zog::render('productView.php', [...]);
-} catch (ZogTemplateException $e) {
-    // Template error (developer issue)
-} catch (ZogException $e) {
-    // Runtime error (missing file, IO, etc.)
+    echo Zog::render('pages/home.php', ['user' => $user]);
+} catch (\Zog\ZogTemplateException $e) {
+    // render a friendly error page for template errors
+} catch (\Zog\ZogException $e) {
+    // log and render a generic error page
 }
 ```
 
 ---
 
-## Notes & Limitations
+## Notes
 
-* Zog is intentionally small and **PHP-first**:
+* Zog does **not** use `eval`; compiled templates are normal PHP files that are `require`d.
+* All data passed into `render()` (or via hybrid) is available as:
 
-  * Expressions inside `@{{ ... }}`, `@raw(...)`, `@json(...)`,
-    `zp-if`, and `zp-for` are plain PHP.
-* Avoid feeding untrusted user input into `@raw()` or complex PHP expressions; use `@{{ ... }}` for safe HTML output.
-* Hybrid cache is **filesystem-based**:
-
-  * Make sure your static directory is writable by PHP.
-  * Do not expose compiled or static directories directly to public if you don’t intend to.
+  * Individual variables (`$user`, `$title`, etc.).
+  * A full array `$zogData` if you prefer to access everything as an array.
 
 ---
+
+
+
 
 ## License
 
