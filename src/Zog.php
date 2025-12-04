@@ -5,7 +5,9 @@ namespace Zog;
 /**
  * Zog - Lightweight view engine + hybrid static cache (no eval)
  *
- * (نسخهٔ اصلاح‌شده برای حل مشکل @php(...) و پرانتزهای تو در تو)
+ * Updated version that fixes @php(...) handling, nested parentheses,
+ * and adds support for the zp-nozog attribute to disable DOM-level
+ * Zog processing on an element subtree.
  */
 
 class ZogException extends \RuntimeException
@@ -46,7 +48,7 @@ class Zog
 
     /**
      * Placeholder map used to protect directives before DOM parsing.
-     * key => ['type' => '@php'|'@json'|'@raw'|'@tojs', 'inner' => string]
+     * key => ['type' => '@php'|'@json'|'@raw'|'@tojs'|'@section'|'@yield'|'@component', 'inner' => string]
      */
     protected static array $directivePlaceholders = [];
 
@@ -187,6 +189,31 @@ class Zog
     }
 
     /**
+     * Render a view inside a layout using the section / yield API.
+     *
+     * @param string $layoutView Layout view (e.g. 'layouts/main.php')
+     * @param string $view       Child view (e.g. 'pages/home.php')
+     * @param array  $data       Shared data for both views
+     */
+    public static function renderLayout(
+        string $layoutView,
+        string $view,
+        array $data = []
+    ): string {
+        return View::renderWithLayout($view, $layoutView, $data);
+    }
+
+    /**
+     * Render a view as a component / partial.
+     *
+     * Can be called directly from PHP or via @component(...) in templates.
+     */
+    public static function component(string $view, array $data = []): string
+    {
+        return View::component($view, $data);
+    }
+
+    /**
      * Hybrid rendering with optional lazy data factory.
      */
     public static function hybrid(
@@ -279,8 +306,6 @@ class Zog
             'Hybrid third parameter must be either an array, a callable, or null.'
         );
     }
-
-
 
     /**
      * Remove all static files in the configured static directory.
@@ -453,7 +478,6 @@ class Zog
         return $normalized;
     }
 
-
     /**
      * Compile a view file into a cached PHP file if needed,
      * and return the compiled file path.
@@ -572,8 +596,12 @@ class Zog
      *     @raw(expr)          => raw echo
      *     @php( code )        => raw PHP code
      *     @json(expr) / @tojs(expr) => json_encode(...)
+     *     @section(name) / @endsection
+     *     @yield(name)
+     *     @component(view, data)
      *     zp-for="a, i of $arr"
      *     zp-if / zp-else-if / zp-else
+     *     zp-nozog              => disable DOM-level Zog processing for subtree
      */
     protected static function compileTemplate(string $template): string
     {
@@ -582,8 +610,8 @@ class Zog
         $counter = 0;
 
         // helper that stores inner and returns a placeholder token
-        $makePlaceholder = function(string $type) use (&$counter) {
-            return function(string $inner) use (&$counter, $type) {
+        $makePlaceholder = function (string $type) use (&$counter) {
+            return function (string $inner) use (&$counter, $type) {
                 $counter++;
                 $key = "__ZOG_" . strtoupper(trim($type, '@')) . "_" . $counter . "__";
                 // store raw inner content (unchanged) and the type
@@ -618,6 +646,27 @@ class Zog
             $makePlaceholder('@raw')
         );
 
+        // Protect @section(...)
+        $template = self::replaceDirectiveWithBalancedParentheses(
+            $template,
+            '@section(',
+            $makePlaceholder('@section')
+        );
+
+        // Protect @yield(...)
+        $template = self::replaceDirectiveWithBalancedParentheses(
+            $template,
+            '@yield(',
+            $makePlaceholder('@yield')
+        );
+
+        // Protect @component(...)
+        $template = self::replaceDirectiveWithBalancedParentheses(
+            $template,
+            '@component(',
+            $makePlaceholder('@component')
+        );
+
         // ---------- now DOM parse safely ----------
         $dom = new \DOMDocument('1.0', 'UTF-8');
 
@@ -636,8 +685,13 @@ class Zog
 
     /**
      * Recursively compile a DOMNodeList into PHP/HTML string.
+     *
+     * @param \DOMNodeList $nodes
+     * @param bool         $noZog  When true, DOM-level Zog directives (zp-if, zp-for, etc.)
+     *                             are not applied for this subtree. Inline text directives
+     *                             (such as @{{ }}) are still processed.
      */
-    protected static function compileNodeList(\DOMNodeList $nodes): string
+    protected static function compileNodeList(\DOMNodeList $nodes, bool $noZog = false): string
     {
         $buffer = '';
 
@@ -654,16 +708,26 @@ class Zog
             if ($node instanceof \DOMText) {
                 $buffer .= self::compileText($node->wholeText);
             } elseif ($node instanceof \DOMElement) {
-                // Handle zp-if chains (if / else-if / else)
-                if ($node->hasAttribute('zp-if')) {
-                    $buffer .= self::compileIfChain($array, $i, $len);
-                } elseif ($node->hasAttribute('zp-else-if') || $node->hasAttribute('zp-else')) {
+                // If this node explicitly disables DOM-level Zog processing,
+                // compile its subtree in "noZog" mode.
+                if ($node->hasAttribute('zp-nozog')) {
+                    $buffer .= self::compileElement($node, true);
+                    continue;
+                }
+
+                // Handle zp-if chains (if / else-if / else) only when Zog is enabled
+                if (!$noZog && $node->hasAttribute('zp-if')) {
+                    $buffer .= self::compileIfChain($array, $i, $len, $noZog);
+                } elseif (
+                    !$noZog
+                    && ($node->hasAttribute('zp-else-if') || $node->hasAttribute('zp-else'))
+                ) {
                     // If you reach here, there was no preceding zp-if in this level
                     throw new ZogTemplateException(
                         'Found zp-else-if / zp-else without a preceding zp-if near <' . $node->tagName . '>.'
                     );
                 } else {
-                    $buffer .= self::compileElement($node);
+                    $buffer .= self::compileElement($node, $noZog);
                 }
             } elseif ($node instanceof \DOMComment) {
                 $buffer .= '<!--' . $node->nodeValue . '-->';
@@ -678,8 +742,13 @@ class Zog
     /**
      * Compile a zp-if / zp-else-if / zp-else chain starting at index $i.
      * Updates $i to the last index of the chain.
+     *
+     * @param array $nodes
+     * @param int   $i
+     * @param int   $len
+     * @param bool  $noZog  Current Zog state for this DOM level (normally false here).
      */
-    protected static function compileIfChain(array $nodes, int &$i, int $len): string
+    protected static function compileIfChain(array $nodes, int &$i, int $len, bool $noZog): string
     {
         $branches = [];
 
@@ -764,7 +833,7 @@ class Zog
                 $out .= '<?php else: ?>';
             }
 
-            $out .= self::compileElement($branch['node']);
+            $out .= self::compileElement($branch['node'], $noZog);
         }
 
         $out .= '<?php endif; ?>';
@@ -778,21 +847,32 @@ class Zog
     /**
      * Compile a single HTML element (plus its children) into PHP/HTML.
      * Handles zp-for at element level.
+     *
+     * @param \DOMElement $el
+     * @param bool        $noZog When true, Zog control attributes are preserved
+     *                           as-is and zp-for is not converted to foreach.
      */
-    protected static function compileElement(\DOMElement $el): string
+    protected static function compileElement(\DOMElement $el, bool $noZog = false): string
     {
         $tag = $el->tagName;
 
-        // Attributes except zp-*
+        // Attributes; optionally strip Zog control attributes
         $attrParts = [];
         if ($el->hasAttributes()) {
             foreach ($el->attributes as $attr) {
                 $name = $attr->nodeName;
-                if (strpos($name, 'zp-') === 0) {
-                    // zp-* attributes are consumed by the template engine and
-                    // should not appear in the final HTML output.
+
+                // zp-nozog is always internal to the engine and never rendered.
+                if ($name === 'zp-nozog') {
                     continue;
                 }
+
+                if (!$noZog && strpos($name, 'zp-') === 0) {
+                    // Zog control attributes are consumed by the template engine and
+                    // should not appear in the final HTML output when Zog is enabled.
+                    continue;
+                }
+
                 $value = $attr->nodeValue ?? '';
                 $attrParts[] = $name . '="' . htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"';
             }
@@ -821,15 +901,17 @@ class Zog
 
         $inner = '';
         if (!$isSelfClosing) {
-            $inner = self::compileNodeList($el->childNodes);
+            // Propagate the noZog flag into children so that DOM-level directives
+            // (zp-if/zp-for) are skipped inside zp-nozog regions.
+            $inner = self::compileNodeList($el->childNodes, $noZog);
         }
 
         $openTag = '<' . $tag . $attrString . ($isSelfClosing ? ' />' : '>');
         $closeTag = $isSelfClosing ? '' : '</' . $tag . '>';
 
-        // Handle zp-for (loop)
+        // Handle zp-for (loop) only when Zog is enabled for this element
         $zpForExpr = null;
-        if ($el->hasAttribute('zp-for')) {
+        if (!$noZog && $el->hasAttribute('zp-for')) {
             $zpForExpr = trim($el->getAttribute('zp-for'));
             $el->removeAttribute('zp-for');
         }
@@ -852,6 +934,7 @@ class Zog
      * Compile plain text node content:
      *   - placeholders for protected directives are restored here
      *   - @{{ expr }}               => escaped echo
+     *   - @endsection               => View::endSection()
      */
     protected static function compileText(string $text): string
     {
@@ -863,7 +946,7 @@ class Zog
         if (strpos($text, '__ZOG_') !== false && !empty(self::$directivePlaceholders)) {
             $text = preg_replace_callback(
                 '/__ZOG_[A-Z]+_[0-9]+__/',
-                function(array $m) {
+                function (array $m) {
                     $key = $m[0];
                     if (!isset(self::$directivePlaceholders[$key])) {
                         return $key; // unknown placeholder, leave as-is
@@ -896,6 +979,30 @@ class Zog
                         return '<?php echo ' . $expr . '; ?>';
                     }
 
+                    if ($type === '@section') {
+                        $args = trim($inner);
+                        if ($args === '') {
+                            throw new ZogTemplateException('@section() requires a section name.');
+                        }
+                        return '<?php \\Zog\\View::startSection(' . $args . '); ?>';
+                    }
+
+                    if ($type === '@yield') {
+                        $args = trim($inner);
+                        if ($args === '') {
+                            throw new ZogTemplateException('@yield() requires a section name.');
+                        }
+                        return '<?php echo \\Zog\\View::yieldSection(' . $args . '); ?>';
+                    }
+
+                    if ($type === '@component') {
+                        $args = trim($inner);
+                        if ($args === '') {
+                            throw new ZogTemplateException('@component() requires at least a view name.');
+                        }
+                        return '<?php echo \\Zog\\View::component(' . $args . '); ?>';
+                    }
+
                     return $key;
                 },
                 $text
@@ -907,7 +1014,7 @@ class Zog
             throw new ZogTemplateException('@php directive is disabled for security reasons.');
         }
 
-        // 5) Handle @{{ expr }}  (escaped echo)
+        // Handle @{{ expr }}  (escaped echo)
         $text = preg_replace_callback(
             '/@\{\{\s*(.+?)\s*\}\}/s',
             function (array $m): string {
@@ -926,6 +1033,15 @@ class Zog
             $text
         );
 
+        // Handle @endsection directive (no parentheses)
+        if (strpos($text, '@endsection') !== false) {
+            $text = preg_replace(
+                '/@endsection\b/',
+                '<?php \\Zog\\View::endSection(); ?>',
+                $text
+            );
+        }
+
         return $text;
     }
 
@@ -935,6 +1051,9 @@ class Zog
      *   @json(...)
      *   @tojs(...)
      *   @raw(...)
+     *   @section(...)
+     *   @yield(...)
+     *   @component(...)
      *
      * This version is robust: it ignores parentheses inside single/double
      * quoted strings, line/block comments, and attempts to detect heredoc/nowdoc.
@@ -1202,7 +1321,8 @@ class Zog
                 $m
             )
         ) {
-            $itemVar = self::ensurePhpVariable($m[1]); // خودش $ اضافه می‌کند
+            // ensurePhpVariable adds the '$' prefix when needed
+            $itemVar = self::ensurePhpVariable($m[1]);
             $keyVar = self::ensurePhpVariable($m[2]);
             $collectionExpr = self::ensurePhpExpression($m[3]);
 
@@ -1225,7 +1345,6 @@ class Zog
 
         throw new ZogTemplateException('Invalid zp-for expression: ' . $expr);
     }
-
 
     /**
      * Ensure a variable name is prefixed with '$'.
