@@ -594,8 +594,7 @@ try {
 * Zog is intentionally small and framework-agnostic – you can drop it into any PHP project or framework and wire it to your router/controller layer.
 
 ## License
-
-MIT.
+MIT
 
 ## Contributing
 
