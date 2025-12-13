@@ -5,7 +5,6 @@ Lightweight PHP template engine with hybrid static caching (no `eval`, no `DOMDo
 
 - **GitHub:** https://github.com/zogjs/zog-php  
 - **Packagist:** https://packagist.org/packages/zogjs/zog-php  
-- **Homepage:** https://zogjs.com  
 - **Install:** `composer require zogjs/zog-php`
 
 Zog gives you a tiny, framework-agnostic view layer plus an optional static HTML cache in front of it. It compiles your templates to plain PHP files, never uses `eval`, and is designed to play nicely with modern frontend frameworks (Vue, Alpine, Livewire, etc.) by leaving their attributes untouched.
